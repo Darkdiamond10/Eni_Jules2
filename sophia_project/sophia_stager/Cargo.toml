@@ -8,3 +8,4 @@ sophia_macros = { path = "../sophia_macros" }
 libc = "0.2"
 nix = { version = "0.27", features = ["fs", "process"] }
 rand = "0.8"
+sc = "0.2"

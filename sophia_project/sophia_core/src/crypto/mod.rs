@@ -7,7 +7,6 @@ use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
 };
 use std::fs;
-use std::process::Command;
 use nix::sys::mman::{mlock, munlock};
 use std::ptr;
 
@@ -19,7 +18,6 @@ pub struct GhostVault {
 impl GhostVault {
     pub fn new() -> Self {
         let fingerprint = Self::derive_fingerprint();
-        // Fixed: Use encode_b64 to ensure the salt is valid for the password-hash crate
         let salt = SaltString::encode_b64(b"SOPHIA_SALT_V1").unwrap();
         let argon2 = Argon2::default();
         let password_hash = argon2
@@ -34,12 +32,20 @@ impl GhostVault {
 
         for i in 0..32 {
             key_part1[i] = rand::random::<u8>();
-            key_part2[i] = master_key[i] ^ key_part1[i];
+            unsafe {
+                let p1 = *key_part1.as_ptr().add(i);
+                let mk = *master_key.as_ptr().add(i);
+                *key_part2.as_mut_ptr().add(i) = p1 ^ mk;
+            }
         }
 
         unsafe {
             mlock(key_part1.as_ptr() as *const libc::c_void, key_part1.len()).ok();
             mlock(key_part2.as_ptr() as *const libc::c_void, key_part2.len()).ok();
+
+            for _i in 0..master_key.len() {
+                ptr::write_volatile(master_key.as_ptr() as *mut u8, 0);
+            }
         }
 
         Self { key_part1, key_part2 }
@@ -53,19 +59,27 @@ impl GhostVault {
 
         let user = std::env::var("USER").unwrap_or_else(|_| "unknown_user".to_string());
 
-        let mac = Command::new("cat")
-            .arg("/sys/class/net/eth0/address")
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_else(|_| "00:00:00:00:00:00".to_string());
+        let mut mac = "00:00:00:00:00:00".to_string();
+        for iface in &["eth0", "wlan0", "enp0s3", "ens33"] {
+            let path = format!("/sys/class/net/{}/address", iface);
+            if let Ok(m) = fs::read_to_string(path) {
+                mac = m.trim().to_string();
+                break;
+            }
+        }
 
         format!("{}-{}-{}", machine_id, user, mac)
     }
 
     pub fn decrypt(&self, ciphertext: &[u8], nonce_bytes: &[u8]) -> Result<Vec<u8>, ()> {
         let mut master_key = [0u8; 32];
+
         for i in 0..32 {
-            master_key[i] = self.key_part1[i] ^ self.key_part2[i];
+            unsafe {
+                let p1 = ptr::read_volatile(self.key_part1.as_ptr().add(i));
+                let p2 = ptr::read_volatile(self.key_part2.as_ptr().add(i));
+                ptr::write_volatile(master_key.as_mut_ptr().add(i), p1 ^ p2);
+            }
         }
 
         let cipher = XChaCha20Poly1305::new(master_key.as_slice().into());
@@ -75,6 +89,7 @@ impl GhostVault {
 
         unsafe {
             for i in 0..32 {
+                ptr::write_volatile(master_key.as_mut_ptr().add(i), rand::random::<u8>());
                 ptr::write_volatile(master_key.as_mut_ptr().add(i), 0);
             }
         }
@@ -86,8 +101,8 @@ impl GhostVault {
 impl Drop for GhostVault {
     fn drop(&mut self) {
         unsafe {
-            for b in self.key_part1.iter_mut() { ptr::write_volatile(b, 0); }
-            for b in self.key_part2.iter_mut() { ptr::write_volatile(b, 0); }
+            for b in self.key_part1.iter_mut() { ptr::write_volatile(b, rand::random::<u8>()); ptr::write_volatile(b, 0); }
+            for b in self.key_part2.iter_mut() { ptr::write_volatile(b, rand::random::<u8>()); ptr::write_volatile(b, 0); }
             munlock(self.key_part1.as_ptr() as *const libc::c_void, self.key_part1.len()).ok();
             munlock(self.key_part2.as_ptr() as *const libc::c_void, self.key_part2.len()).ok();
         }

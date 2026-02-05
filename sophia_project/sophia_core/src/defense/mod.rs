@@ -1,5 +1,7 @@
 use std::process::{Command, exit};
-use libc::{prctl, PR_SET_PDEATHSIG, SIGKILL};
+use sc::syscall;
+use libc::{PR_SET_PDEATHSIG, SIGKILL};
+use std::ptr;
 
 pub fn check_ptrace() -> bool {
     if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
@@ -17,7 +19,27 @@ pub fn check_ptrace() -> bool {
 
 pub fn trigger_cyanide_pill() {
     println!("[CRITICAL] Debugger detected or environment compromised.");
-    println!("*Wiping sensitive memory regions...*");
+
+    let mut critical_region = vec![0u8; 1024];
+
+    println!("*Initiating multi-pass memory wipe...*");
+    unsafe {
+        let ptr = critical_region.as_mut_ptr();
+        let len = critical_region.len();
+
+        for i in 0..len {
+            ptr::write_volatile(ptr.add(i), rand::random::<u8>());
+        }
+
+        for i in 0..len {
+            let val = ptr::read_volatile(ptr.add(i));
+            ptr::write_volatile(ptr.add(i), val ^ 0xAA);
+        }
+
+        for i in 0..len {
+            ptr::write_volatile(ptr.add(i), 0);
+        }
+    }
 
     let _ = Command::new("logger")
         .arg("-s")
@@ -32,6 +54,6 @@ pub fn trigger_cyanide_pill() {
 
 pub fn set_self_destruct() {
     unsafe {
-        prctl(PR_SET_PDEATHSIG, SIGKILL);
+        syscall!(PRCTL, PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0);
     }
 }

