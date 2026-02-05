@@ -1,0 +1,10 @@
+[package]
+name = "sophia_stager"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sophia_macros = { path = "../sophia_macros" }
+libc = "0.2"
+nix = { version = "0.27", features = ["fs", "process"] }
+rand = "0.8"
