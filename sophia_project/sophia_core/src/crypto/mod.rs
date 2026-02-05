@@ -9,6 +9,7 @@ use chacha20poly1305::{
 use std::fs;
 use nix::sys::mman::{mlock, munlock};
 use std::ptr;
+use sophia_macros::encrypt_string;
 
 pub struct GhostVault {
     key_part1: Vec<u8>,
@@ -18,7 +19,8 @@ pub struct GhostVault {
 impl GhostVault {
     pub fn new() -> Self {
         let fingerprint = Self::derive_fingerprint();
-        let salt = SaltString::encode_b64(b"SOPHIA_SALT_V1").unwrap();
+        let salt_str = encrypt_string!("SOPHIA_SALT_V1");
+        let salt = SaltString::encode_b64(salt_str.as_bytes()).unwrap();
         let argon2 = Argon2::default();
         let password_hash = argon2
             .hash_password(fingerprint.as_bytes(), &salt)
@@ -52,16 +54,25 @@ impl GhostVault {
     }
 
     fn derive_fingerprint() -> String {
-        let machine_id = fs::read_to_string("/etc/machine-id")
-            .unwrap_or_else(|_| "unknown_machine".to_string())
+        let machine_id_path = encrypt_string!("/etc/machine-id");
+        let machine_id = fs::read_to_string(machine_id_path)
+            .unwrap_or_else(|_| encrypt_string!("unknown_machine"))
             .trim()
             .to_string();
 
-        let user = std::env::var("USER").unwrap_or_else(|_| "unknown_user".to_string());
+        let user_env = encrypt_string!("USER");
+        let user = std::env::var(user_env).unwrap_or_else(|_| encrypt_string!("unknown_user"));
 
-        let mut mac = "00:00:00:00:00:00".to_string();
-        for iface in &["eth0", "wlan0", "enp0s3", "ens33"] {
-            let path = format!("/sys/class/net/{}/address", iface);
+        let mut mac = encrypt_string!("00:00:00:00:00:00");
+        let ifaces = vec![
+            encrypt_string!("eth0"),
+            encrypt_string!("wlan0"),
+            encrypt_string!("enp0s3"),
+            encrypt_string!("ens33"),
+        ];
+
+        for iface in ifaces {
+            let path = format!("{}/{}/{}", encrypt_string!("/sys/class/net"), iface, encrypt_string!("address"));
             if let Ok(m) = fs::read_to_string(path) {
                 mac = m.trim().to_string();
                 break;

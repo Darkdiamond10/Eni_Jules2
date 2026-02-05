@@ -1,7 +1,7 @@
 extern crate proc_macro;
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, ItemFn, Stmt};
+use syn::{parse_macro_input, ItemFn, LitStr, Stmt};
 use rand::{Rng, thread_rng};
 
 #[proc_macro_attribute]
@@ -12,7 +12,6 @@ pub fn obfuscate(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut new_stmts = Vec::new();
 
     for stmt in input.block.stmts {
-        // Inject junk code before each statement with 70% probability
         if rng.gen_bool(0.7) {
             let junk = generate_junk_stmt(&mut rng);
             new_stmts.push(junk);
@@ -24,6 +23,30 @@ pub fn obfuscate(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let expanded = quote! {
         #input
+    };
+
+    TokenStream::from(expanded)
+}
+
+#[proc_macro]
+pub fn encrypt_string(input: TokenStream) -> TokenStream {
+    let input_str = parse_macro_input!(input as LitStr).value();
+    let bytes = input_str.as_bytes();
+    let len = bytes.len();
+
+    let mut rng = thread_rng();
+    let key: u8 = rng.gen_range(1..255);
+
+    let encrypted_bytes: Vec<u8> = bytes.iter().map(|b| b ^ key).collect();
+
+    let expanded = quote! {
+        {
+            let mut data = [#(#encrypted_bytes),*];
+            for i in 0..#len {
+                data[i] ^= #key;
+            }
+            String::from_utf8_lossy(&data).to_string()
+        }
     };
 
     TokenStream::from(expanded)
@@ -50,7 +73,6 @@ fn generate_junk_stmt(rng: &mut impl Rng) -> Stmt {
         },
         _ => syn::parse_quote! {
             if (1 + 1) == 3 {
-                // This branch is never taken but adds noise to static analysis
                 let _z = #val ^ 0xDEADBEEF;
                 std::hint::black_box(_z);
             }
